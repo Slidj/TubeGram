@@ -19,7 +19,58 @@ let currentPendingAuth: {
   expires_in: number;
 } | null = null;
 let isLoggedIn = false;
-let userInfo: { name: string; email?: string; avatar?: string } | null = null;
+let userInfo: { name: string; avatar?: string } | null = null;
+
+// Helper to recursively extract videos from TV browse renderers
+function extractVideosFromTv(obj: any, found: any[] = []): any[] {
+  if (!obj || typeof obj !== 'object') return found;
+
+  if (obj.tileRenderer && obj.tileRenderer.contentId) {
+    const t = obj.tileRenderer;
+    const title =
+      t.metadata?.tileMetadataRenderer?.title?.simpleText ||
+      t.header?.tileHeaderRenderer?.headline?.simpleText ||
+      'Відео';
+    const author =
+      t.metadata?.tileMetadataRenderer?.lines?.[0]?.lineRenderer?.items?.[0]?.lineItemRenderer?.text?.runs?.[0]?.text ||
+      'Автор';
+    const views =
+      t.metadata?.tileMetadataRenderer?.lines?.[1]?.lineRenderer?.items?.[1]?.lineItemRenderer?.text?.simpleText ||
+      t.metadata?.tileMetadataRenderer?.lines?.[1]?.lineRenderer?.items?.[0]?.lineItemRenderer?.text?.simpleText ||
+      'Перегляд';
+    const published =
+      t.metadata?.tileMetadataRenderer?.lines?.[1]?.lineRenderer?.items?.[3]?.lineItemRenderer?.text?.simpleText ||
+      'Нещодавно';
+    const duration =
+      t.header?.tileHeaderRenderer?.thumbnailOverlays?.find((o: any) => o.thumbnailOverlayTimeStatusRenderer)
+        ?.thumbnailOverlayTimeStatusRenderer?.text?.simpleText || '10:00';
+    const thumb =
+      t.header?.tileHeaderRenderer?.thumbnail?.thumbnails?.[0]?.url ||
+      `https://i.ytimg.com/vi/${t.contentId}/hqdefault.jpg`;
+
+    // Deduplicate by video ID
+    if (!found.some((v) => v.id === t.contentId)) {
+      found.push({
+        id: t.contentId,
+        title,
+        channelTitle: author,
+        views,
+        publishedTime: published,
+        duration: 300,
+        durationFormatted: duration,
+        description: `Відео з вашого акаунта YouTube від каналу ${author}`,
+        thumbnail: thumb,
+        sponsorCount: 1
+      });
+    }
+    return found;
+  }
+
+  for (const key of Object.keys(obj)) {
+    extractVideosFromTv(obj[key], found);
+  }
+  return found;
+}
 
 // Initialize InnerTube
 async function initInnertube() {
@@ -77,10 +128,12 @@ async function initInnertube() {
 async function fetchUserInfo() {
   if (!innertube || !isLoggedIn) return;
   try {
-    const info = (await innertube.account.getInfo()) as any;
+    // Read from recent history or account
+    const hist = await innertube.actions.execute('/browse', { browseId: 'FEhistory', client: 'TV' });
+    const videos = extractVideosFromTv(hist.data);
     userInfo = {
-      name: info?.contents?.headers?.[0]?.title?.toString() || info?.contents?.header?.[0]?.title?.toString() || 'Мій YouTube Акаунт',
-      avatar: info?.contents?.headers?.[0]?.thumbnail?.[0]?.url || info?.contents?.header?.[0]?.thumbnail?.[0]?.url || undefined
+      name: 'Синхронізовано з YouTube',
+      avatar: videos[0]?.thumbnail || undefined
     };
   } catch (e) {
     userInfo = { name: 'YouTube Акаунт' };
@@ -99,32 +152,30 @@ app.get('/api/youtube/auth/device', async (req, res) => {
     return res.json({ loggedIn: true, user: userInfo });
   }
 
-  // If already have pending code
-  if (currentPendingAuth) {
+  const pending: any = currentPendingAuth;
+  if (pending) {
     return res.json({
       loggedIn: false,
       pending: true,
-      user_code: currentPendingAuth.user_code,
-      verification_url: currentPendingAuth.verification_url
+      user_code: pending.user_code,
+      verification_url: pending.verification_url
     });
   }
 
-  // Start signIn flow
   try {
     innertube.session.signIn().catch((err) => {
       console.warn('Sign-in wait completed or expired:', err?.message);
     });
 
-    // Wait a brief moment for 'auth-pending' event
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    const pending: any = currentPendingAuth;
-    if (pending) {
+    const checkPending: any = currentPendingAuth;
+    if (checkPending) {
       return res.json({
         loggedIn: false,
         pending: true,
-        user_code: pending.user_code,
-        verification_url: pending.verification_url
+        user_code: checkPending.user_code,
+        verification_url: checkPending.verification_url
       });
     }
 
@@ -159,58 +210,66 @@ app.post('/api/youtube/auth/logout', async (req, res) => {
   res.json({ success: true });
 });
 
-// Helper to format video items
-function formatVideoItem(video: any) {
-  return {
-    id: video.id || video.video_id,
-    title: video.title?.text || video.title?.toString() || 'Відео',
-    channelTitle: video.author?.name || video.short_byline?.text || video.channel?.name || 'YouTube Автор',
-    views: video.view_count?.text || video.short_view_count?.text || 'Перегляд',
-    publishedTime: video.published?.text || 'Нещодавно',
-    duration: video.duration?.seconds || 300,
-    durationFormatted: video.duration?.text || '05:00',
-    description: video.description_snippet?.text || '',
-    thumbnail: video.thumbnails?.[video.thumbnails.length - 1]?.url || `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
-    sponsorCount: 1
-  };
-}
-
-// API: Real Personalized Home Feed (Recommendations)
+// API: Real Personalized Home Feed (Recommendations via TV client)
 app.get('/api/youtube/home', async (req, res) => {
   if (!innertube) {
     return res.status(500).json({ error: 'Плеєр завантажується...' });
   }
 
   try {
-    const feed = await innertube.getHomeFeed();
-    const videos = feed.videos.slice(0, 20).map(formatVideoItem);
-    res.json({ videos, isPersonalized: isLoggedIn });
+    if (isLoggedIn) {
+      const response = await innertube.actions.execute('/browse', {
+        browseId: 'FEwhat_to_watch',
+        client: 'TV'
+      });
+      const videos = extractVideosFromTv(response.data);
+      return res.json({ videos, isPersonalized: true });
+    }
+
+    // Default web search feed if not logged in
+    const search = await innertube.search('trending music tech');
+    const videos = search.videos.slice(0, 20).map((v: any) => ({
+      id: v.id,
+      title: v.title?.text || 'Відео',
+      channelTitle: v.author?.name || 'YouTube',
+      views: v.short_view_count?.text || 'Перегляд',
+      publishedTime: v.published?.text || 'Нещодавно',
+      duration: v.duration?.seconds || 300,
+      durationFormatted: v.duration?.text || '05:00',
+      description: v.description_snippet?.text || '',
+      thumbnail: v.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+      sponsorCount: 1
+    }));
+    res.json({ videos, isPersonalized: false });
   } catch (err: any) {
-    console.warn('Home feed fetch warning:', err?.message);
-    res.json({ videos: [], isPersonalized: false, error: err.message });
+    console.warn('Home feed fetch fallback:', err?.message);
+    res.json({ videos: [], isPersonalized: false });
   }
 });
 
-// API: Real Subscriptions Feed (SmartTube style)
+// API: Real Subscriptions Feed (SmartTube style via TV client)
 app.get('/api/youtube/subscriptions', async (req, res) => {
   if (!innertube || !isLoggedIn) {
     return res.status(401).json({ error: 'Потрібна авторизація для перегляду підписок' });
   }
 
   try {
-    const subsFeed = await innertube.getSubscriptionsFeed();
-    const videos = subsFeed.videos.slice(0, 30).map(formatVideoItem);
+    const response = await innertube.actions.execute('/browse', {
+      browseId: 'FEsubscriptions',
+      client: 'TV'
+    });
+    const videos = extractVideosFromTv(response.data);
 
     // Extract unique channels
     const channelsMap = new Map();
-    videos.forEach((v) => {
+    videos.forEach((v: any) => {
       if (v.channelTitle && !channelsMap.has(v.channelTitle)) {
         channelsMap.set(v.channelTitle, {
           id: `ch-${v.channelTitle}`,
           channelId: `ch-${v.channelTitle}`,
           title: v.channelTitle,
           description: 'Підписка з вашого акаунта YouTube',
-          thumbnail: ''
+          thumbnail: v.thumbnail || ''
         });
       }
     });
@@ -220,24 +279,27 @@ app.get('/api/youtube/subscriptions', async (req, res) => {
       videos
     });
   } catch (err: any) {
-    console.error('Subscriptions fetch error:', err);
-    res.status(500).json({ error: err.message || 'Не вдалося завантажити підписки' });
+    console.error('Subscriptions fetch error:', err?.message);
+    res.status(500).json({ error: err?.message || 'Не вдалося завантажити підписки' });
   }
 });
 
-// API: Real Watch History (SmartTube style)
+// API: Real Watch History (SmartTube style via TV client)
 app.get('/api/youtube/history', async (req, res) => {
   if (!innertube || !isLoggedIn) {
     return res.status(401).json({ error: 'Потрібна авторизація для перегляду історії' });
   }
 
   try {
-    const history = await innertube.getHistory();
-    const videos = history.videos.slice(0, 30).map(formatVideoItem);
+    const response = await innertube.actions.execute('/browse', {
+      browseId: 'FEhistory',
+      client: 'TV'
+    });
+    const videos = extractVideosFromTv(response.data);
     res.json({ videos });
   } catch (err: any) {
-    console.error('History fetch error:', err);
-    res.status(500).json({ error: err.message || 'Не вдалося завантажити історію' });
+    console.error('History fetch error:', err?.message);
+    res.status(500).json({ error: err?.message || 'Не вдалося завантажити історію' });
   }
 });
 
@@ -249,8 +311,7 @@ app.post('/api/youtube/history/record', async (req, res) => {
   }
 
   try {
-    const info = (await innertube.getInfo(videoId)) as any;
-    // Send playback stats ping to register in YouTube history
+    const info = (await innertube.getInfo(videoId, { client: 'TV' })) as any;
     if (info?.playback_tracking?.videostats_playback_url) {
       await innertube.session.http.fetch(info.playback_tracking.videostats_playback_url.toString()).catch(() => {});
     }
