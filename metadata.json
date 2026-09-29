@@ -1,0 +1,6 @@
+{
+  "name": "TubeGram - Ad-Free YouTube Telegram Mini App",
+  "description": "YouTube клієнт без офіційної та спонсорської реклами (SmartTube + SponsorBlock) для Telegram Mini App та браузера.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
