@@ -159,7 +159,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     postIframeCommand('listening');
     postIframeCommand('addEventListener', ['onStateChange']);
     postIframeCommand('addEventListener', ['infoDelivery']);
-    setHasStarted(true);
+    postIframeCommand('playVideo');
+    // Safety timer: if no state change received in 2.5s, reveal player
+    setTimeout(() => {
+      setHasStarted(true);
+    }, 2500);
   };
 
   // Playback timer & SponsorBlock auto-skipper
@@ -414,7 +418,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             title={video.title}
             onLoad={handleIframeLoad}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            className="w-full h-full border-0 pointer-events-none scale-102"
+            className="w-full h-full border-0 pointer-events-none scale-108 -translate-y-0.5 select-none"
           />
         ) : (
           <video
@@ -428,6 +432,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
 
         {/* 
+          PURE BRANDED LOADING SPLASH:
+          Covers the video viewport until playback has ACTUALLY started,
+          completely preventing YouTube's initial embed thumbnail or watermark from flashing!
+        */}
+        {!hasStarted && (
+          <div className="absolute inset-0 z-22 bg-slate-950 flex flex-col items-center justify-center pointer-events-none transition-opacity duration-300">
+            <img 
+              src={video.thumbnail} 
+              alt="" 
+              className="absolute inset-0 w-full h-full object-cover blur-md opacity-35 scale-105"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/70 to-slate-950/90" />
+            
+            <div className="relative z-10 flex flex-col items-center text-center p-6 max-w-sm">
+              <div className="relative mb-3.5">
+                <div className="w-16 h-16 rounded-full bg-red-600 text-white flex items-center justify-center shadow-2xl ring-4 ring-red-600/20">
+                  <Play className="w-7 h-7 fill-current ml-1" />
+                </div>
+                <div className="absolute -inset-1 rounded-full border-2 border-emerald-400 border-t-transparent animate-spin" />
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/90 border border-slate-750 text-slate-200 text-xs font-medium backdrop-blur-md mb-2 shadow-lg">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Завантаження чистого відео...</span>
+              </div>
+              <p className="text-[11px] text-slate-400 font-mono">TubeGram • 0% Реклами • SponsorBlock</p>
+            </div>
+          </div>
+        )}
+
+        {/* Bottom-right corner watermark shield mask */}
+        <div className="absolute bottom-0 right-0 w-28 h-14 pointer-events-none z-21 bg-gradient-to-tl from-black via-black/80 to-transparent" />
+
+        {/* 
           CRITICAL CLICK-SHIELD LAYER: 
           Captures ALL user taps & clicks on the video area!
           Prevents the user from clicking any YouTube links, title, logo, or recommendations!
@@ -437,51 +474,75 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           className="absolute inset-0 z-20 cursor-pointer"
         />
 
-        {/* Gradient Scrim */}
+        {/* Top Header Mask overlay (hides any YouTube title & shows clean info) */}
+        <div className={`absolute top-0 left-0 right-0 z-25 p-4 bg-gradient-to-b from-black/95 via-black/60 to-transparent transition-opacity duration-300 pointer-events-none ${
+          showControls ? 'opacity-100' : 'opacity-0'
+        }`}>
+          <div className="max-w-[70%]">
+            <h3 className="text-sm font-semibold text-white truncate drop-shadow-md">{video.title}</h3>
+            <p className="text-xs text-slate-300 truncate drop-shadow-md">{video.channelTitle}</p>
+          </div>
+        </div>
+
+        {/* Gradient Scrim for bottom controls */}
         <div 
           onClick={togglePlay}
-          className={`absolute inset-0 z-20 bg-gradient-to-t from-black/85 via-transparent to-black/35 transition-opacity duration-300 pointer-events-none ${
+          className={`absolute inset-0 z-20 bg-gradient-to-t from-black/90 via-transparent to-black/35 transition-opacity duration-300 pointer-events-none ${
             showControls ? 'opacity-100' : 'opacity-0'
           }`}
         />
 
-        {/* Center Play/Pause button */}
+        {/* Center Custom Play/Pause & ±10s Rewind/Forward Controls */}
         {showControls && (
-          <div className="absolute inset-0 z-25 flex items-center justify-center pointer-events-none">
+          <div className="absolute inset-0 z-25 flex items-center justify-center gap-6 pointer-events-none">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                triggerHaptic('light');
+                handleSeek(Math.max(0, currentTime - 10));
+              }}
+              className="pointer-events-auto w-11 h-11 rounded-full bg-slate-900/80 hover:bg-slate-800 text-white flex items-center justify-center shadow-lg border border-slate-700/60 backdrop-blur-md transition-all active:scale-90"
+              title="Назад 10 сек"
+            >
+              <RotateCcw className="w-5 h-5" />
+            </button>
+
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 togglePlay();
               }}
-              className="pointer-events-auto w-14 h-14 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-xl hover:bg-red-500 hover:scale-105 active:scale-95 transition-all"
+              className="pointer-events-auto w-16 h-16 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ring-4 ring-red-600/30"
+              title={isPlaying ? 'Пауза' : 'Відтворити'}
             >
               {isPlaying ? (
-                <Pause className="w-6 h-6 fill-current" />
+                <Pause className="w-7 h-7 fill-current" />
               ) : (
-                <Play className="w-6 h-6 fill-current ml-0.5" />
+                <Play className="w-7 h-7 fill-current ml-1" />
               )}
+            </button>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                triggerHaptic('light');
+                handleSeek(Math.min(duration, currentTime + 10));
+              }}
+              className="pointer-events-auto w-11 h-11 rounded-full bg-slate-900/80 hover:bg-slate-800 text-white flex items-center justify-center shadow-lg border border-slate-700/60 backdrop-blur-md transition-all active:scale-90"
+              title="Вперед 10 сек"
+            >
+              <FastForward className="w-5 h-5" />
             </button>
           </div>
         )}
 
-        {/* Top-Right Badges: Zero-Ad & Engine Toggle */}
+        {/* Top-Right Badge: Pure Ad-Free Player */}
         <div className="absolute top-3 right-3 z-30 flex items-center gap-1.5 pointer-events-auto">
-          <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-950/80 border border-emerald-700/60 text-emerald-400 text-[11px] font-medium backdrop-blur-md shadow-sm">
-            <Shield className="w-3 h-3" />
-            <span>0% Реклами</span>
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-950/85 border border-emerald-500/50 text-emerald-300 text-xs font-medium backdrop-blur-md shadow-lg">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <Shield className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Чисте відео • 0% Реклами</span>
           </div>
-
-          <button
-            onClick={() => {
-              triggerHaptic('light');
-              setMode(mode === 'shielded' ? 'direct_mp4' : 'shielded');
-            }}
-            className="px-2 py-0.5 rounded-lg bg-slate-900/80 border border-slate-700/60 text-slate-300 hover:text-white text-[11px] font-mono backdrop-blur-md transition-colors flex items-center gap-1 active:scale-95"
-            title="Перемкнути рушій відтворення"
-          >
-            <RefreshCw className="w-2.5 h-2.5" />
-            <span>{mode === 'shielded' ? 'Захищений плеєр' : 'Прямий MP4'}</span>
-          </button>
         </div>
 
         {/* Custom Video Controls Bar */}

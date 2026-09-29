@@ -3,6 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Safeguard against environments where window.fetch has only a getter -->
+    <script>
+      (function () {
+        try {
+          var target = window;
+          if (target && target.fetch) {
+            var currentFetch = target.fetch;
+            Object.defineProperty(target, 'fetch', {
+              get: function () {
+                return currentFetch;
+              },
+              set: function (newFetch) {
+                currentFetch = newFetch;
+              },
+              configurable: true,
+              enumerable: true
+            });
+          }
+        } catch (e) {}
+      })();
+    </script>
     <title>TubeGram - Ad-Free YouTube Telegram Mini App</title>
     <meta name="description" content="YouTube клієнт без офіційної та спонсорської реклами (SmartTube + SponsorBlock) для Telegram Mini App та браузера." />
     <meta property="og:title" content="TubeGram - Ad-Free YouTube Telegram Mini App" />

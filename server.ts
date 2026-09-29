@@ -303,6 +303,41 @@ app.get('/api/youtube/history', async (req, res) => {
   }
 });
 
+// API: Stream Resolution Endpoint
+app.get('/api/youtube/stream/:videoId', async (req, res) => {
+  const { videoId } = req.params;
+  if (!videoId) return res.status(400).json({ error: 'Missing videoId' });
+
+  try {
+    if (innertube) {
+      try {
+        const playerRes = await innertube.actions.execute('/player', {
+          videoId,
+          client: 'ANDROID_VR'
+        });
+        const formats = playerRes.data.streamingData?.formats;
+        if (formats && formats.length > 0 && formats[0].url) {
+          return res.json({
+            url: formats[0].url,
+            quality: formats[0].qualityLabel || '360p',
+            mimeType: formats[0].mimeType
+          });
+        }
+      } catch (innerErr) {
+        console.warn('InnerTube stream resolution notice:', innerErr);
+      }
+    }
+
+    // Return fallback clean stream response
+    res.json({
+      url: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&enablejsapi=1&controls=0&disablekb=1&fs=0&modestbranding=1&rel=0&iv_load_policy=3&playsinline=1`,
+      isEmbedFallback: true
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to resolve stream' });
+  }
+});
+
 // API: Record watch time to official YouTube history!
 app.post('/api/youtube/history/record', async (req, res) => {
   const { videoId } = req.body;
@@ -339,8 +374,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
-    console.log(`TubeGram SmartTube Engine running on port ${PORT}`);
+  const portNumber = Number(PORT) || 3000;
+  app.listen(portNumber, '0.0.0.0', () => {
+    console.log(`TubeGram SmartTube Engine running on port ${portNumber}`);
   });
 }
 
